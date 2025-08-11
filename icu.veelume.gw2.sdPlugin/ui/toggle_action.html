@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+
+<head lang="en">
+    <meta charset="utf-8" />
+    <script src="sdpi-components.js"></script>
+</head>
+
+<body>
+    <sdpi-item label="Action Identifier">
+        <sdpi-textfield setting="action" disabled>
+        </sdpi-textfield>
+    </sdpi-item>
+    <sdpi-item label="Action">
+        <sdpi-select setting="action" datasource="getActions" loading="Loading actions..."
+            placeholder="Select an action">
+        </sdpi-select>
+    </sdpi-item>
+</body>
+
+</html>

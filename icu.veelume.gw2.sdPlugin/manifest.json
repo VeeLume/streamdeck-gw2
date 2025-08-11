@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "icu.veelume.gw2",
+  "Name": "Guild Wars 2",
+  "CodePath": "icu.veelume.gw2.exe",
+  "Author": "Veelume",
+  "Version": "0.1.0.1",
+  "Description": "Stream Deck plugin for Star Citizen",
+  "Icon": "imgs/plugin/category-icon",
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "SDKVersion": 3,
+  "Software": {
+    "MinimumVersion": "6.9"
+  },
+  "Category": "Guild Wars 2",
+  "CategoryIcon": "imgs/plugin/marketplace",
+  "ApplicationsToMonitor": {
+    "windows": [
+      "Gw2-64.exe"
+    ]
+  },
+  "Actions": [
+    {
+      "Name": "Set Template",
+      "UUID": "icu.veelume.gw2.set-template",
+      "Icon": "imgs/set_template/icon",
+      "States": [
+        {
+          "Image": "imgs/set_template/icon",
+          "TitleAlignment": "middle",
+          "FontSize": 9,
+          "FontFamily": "Arial"
+        }
+      ],
+      "Tooltip": "Set Template",
+      "PropertyInspectorPath": "ui/set_template.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    },
+    {
+      "Name": "Settings",
+      "UUID": "icu.veelume.gw2.settings",
+      "Icon": "imgs/settings/icon",
+      "States": [
+        {
+          "Image": "imgs/settings/icon",
+          "TitleAlignment": "bottom",
+          "FontSize": 14,
+          "FontFamily": "Arial"
+        }
+      ],
+      "Tooltip": "Settings",
+      "PropertyInspectorPath": "ui/settings.html",
+      "Controllers": [
+        "Keypad"
+      ]
+    }
+  ]
+}

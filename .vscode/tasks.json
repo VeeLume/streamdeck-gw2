@@ -1,0 +1,64 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "--release"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "build",
+            "label": "rust: cargo build"
+        },
+        {
+            "type": "process",
+            "command": "streamdeck",
+            "args": [
+                "stop",
+                "icu.veelume.gw2"
+            ],
+            "problemMatcher": [],
+            "label": "streamdeck: stop",
+            "hide": true,
+        },
+        {
+            "type": "process",
+            "command": "streamdeck",
+            "args": [
+                "restart",
+                "icu.veelume.gw2"
+            ],
+            "problemMatcher": [],
+            "label": "streamdeck: restart",
+            "hide": true,
+        },
+        {
+            "type": "shell",
+            "command": "Copy-Item",
+            "args": [
+                "${workspaceFolder}/target/release/streamdeck-gw2.exe",
+                "${workspaceFolder}/icu.veelume.gw2.sdPlugin/icu.veelume.gw2.exe"
+            ],
+            "problemMatcher": [],
+            "label": "copy to plugin directory",
+            "hide": true,
+        },
+        {
+            "label": "Build Plugin",
+            "dependsOn": [
+                "streamdeck: stop",
+                "rust: cargo build",
+                "copy to plugin directory",
+                "streamdeck: restart"
+            ],
+            "dependsOrder": "sequence",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}
