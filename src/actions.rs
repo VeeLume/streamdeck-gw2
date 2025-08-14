@@ -3,13 +3,10 @@ use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc };
 use constcat::concat;
 use streamdeck_lib::{
     actions::Action,
-    adapters::StartPolicy,
     context::Context,
     debug,
     info,
-    sd_protocol::StreamDeckEvent,
     sd_protocol::views::*,
-    warn,
 };
 
 use crate::PLUGIN_ID;

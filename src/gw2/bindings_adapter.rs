@@ -2,7 +2,6 @@
 use std::{ fs, path::PathBuf, thread, time::Duration };
 use crossbeam_channel::{ bounded, select, Receiver as CbReceiver };
 use notify::{ Event, RecommendedWatcher, RecursiveMode, Watcher };
-use serde_json::Map;
 use streamdeck_lib::{
     adapters::{ Adapter, AdapterHandle, AdapterNotify, StartPolicy },
     context::Context,
