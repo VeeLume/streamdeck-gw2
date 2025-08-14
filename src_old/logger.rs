@@ -1,5 +1,9 @@
 use std::{ fs::{ self, File, OpenOptions }, io::Write, path::{ Path }, sync::{ Arc, Mutex } };
-
+use std::io;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use chrono::Local;
 use directories::BaseDirs;
 

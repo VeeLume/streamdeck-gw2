@@ -1,90 +1,115 @@
-use std::process::ExitCode;
-use std::{ env };
-use std::sync::Arc;
+use std::{ process::exit, sync::Arc };
+use constcat::concat;
+use streamdeck_lib::hooks::AppHooks;
+use streamdeck_lib::{
+    bootstrap::{ parse_launch_args, RunConfig },
+    logger::{ ActionLog, FileLogger },
+    prelude::{ ActionFactory, PluginBuilder },
+    runtime::run,
+    error,
+    info,
+};
 
-use crate::logger::{ ActionLog, FileLogger };
-use crate::plugin::{ run_plugin };
-mod logger;
-mod plugin;
-mod action_handlers;
-mod config;
-mod bindings;
-mod plugin_state;
-mod app;
+use crate::gw2::bindings_adapter::Gw2BindingsAdapter;
+use crate::gw2::{ shared::SharedBindings };
 
-fn main() -> ExitCode {
-    let logger = match FileLogger::from_appdata() {
+mod actions;
+mod gw2 {
+    pub mod enums;
+    pub mod binds;
+    pub mod shared;
+    pub mod bindings_adapter;
+}
+
+const PLUGIN_ID: &str = "icu.veelume.gw2";
+
+fn main() {
+    let logger: Arc<dyn ActionLog> = match FileLogger::from_appdata(PLUGIN_ID) {
         Ok(logger) => Arc::new(logger),
         Err(e) => {
-            eprintln!("Failed to initialize logger: {}", e);
-            return ExitCode::from(1);
+            eprintln!("Failed to create logger: {}", e);
+            exit(1);
         }
     };
 
-    if let Err(e) = safe_main(logger.clone()) {
-        log!(logger, "Error: {:?}", e);
-        match e {
-            SafeMainError::MissingPort() => {
-                log!(logger, "Error: Missing -port argument");
-                return ExitCode::from(2);
+    let args = match parse_launch_args() {
+        Ok(args) => args,
+        Err(e) => {
+            error!(logger, "Failed to parse launch arguments: {}", e);
+            exit(2);
+        }
+    };
+
+    let hooks = AppHooks::default()
+        .on_init(|cx| {
+            info!(cx.log(), "Plugin initialized with ID: {}", PLUGIN_ID);
+            // Reset globals to default state
+            // cx.globals().reset(
+            //     true,
+            //     cx.sd()
+            // );
+            // thread::sleep(std::time::Duration::from_secs(3));
+        })
+        .on_did_receive_global_settings(|cx, settings| {
+            if let Some(shared_binds) = cx.try_ext::<SharedBindings>() {
+                if let Err(e) = shared_binds.replace_from_globals(settings) {
+                    error!(cx.log(), "Failed to replace bindings from globals: {}", e);
+                } else {
+                    info!(cx.log(), "Bindings updated from globals.");
+                }
             }
-            SafeMainError::MissingPluginUUID() => {
-                log!(logger, "Error: Missing -pluginUUID argument");
-                return ExitCode::from(3);
-            }
-            SafeMainError::MissingRegisterEvent() => {
-                log!(logger, "Error: Missing -registerEvent argument");
-                return ExitCode::from(4);
-            }
-            SafeMainError::PluginError => {
-                return ExitCode::from(5);
-            }
+        })
+        .on_application_did_launch(|cx, ev| {
+            info!(cx.log(), "Application launched: {:?}", ev);
+        })
+        .on_application_did_terminate(|cx, ev| {
+            info!(cx.log(), "Application terminated: {:?}", ev);
+        })
+        .on_action_notify(|cx, cx_id, topic, data: &Option<serde_json::Value>| {
+            info!(
+                cx.log(),
+                "Action notification received: cx_id={:?}, topic={}, data={:?}",
+                cx_id,
+                topic,
+                data
+            );
+        });
+
+    let shared_binds = SharedBindings::default();
+
+    let plugin = match
+        PluginBuilder::new()
+            .hooks(hooks)
+            .add_adapter(Gw2BindingsAdapter::new())
+            .with_extension(Arc::new(shared_binds))
+            .register_action(
+                ActionFactory::new(concat!(PLUGIN_ID, ".set-template"), ||
+                    actions::SetTemplateAction::default()
+                )
+            )
+            .register_action(
+                ActionFactory::new(concat!(PLUGIN_ID, ".settings"), ||
+                    actions::SettingsAction::default()
+                )
+            )
+            .build()
+    {
+        Ok(plugin) => plugin,
+        Err(e) => {
+            error!(logger, "Failed to build plugin: {}", e);
+            exit(3);
+        }
+    };
+
+    let cfg = RunConfig::default().log_incoming_websocket(false);
+
+    match run(plugin, args, logger.clone(), cfg) {
+        Ok(_) => {
+            info!(logger, "Plugin exited successfully.");
+        }
+        Err(e) => {
+            error!(logger, "Plugin run failed: {}", e);
+            exit(4);
         }
     }
-
-    ExitCode::SUCCESS
-}
-
-#[derive(Debug)]
-enum SafeMainError {
-    MissingPort(),
-    MissingPluginUUID(),
-    MissingRegisterEvent(),
-    PluginError,
-}
-
-fn safe_main(logger: Arc<dyn ActionLog>) -> Result<(), SafeMainError> {
-    let args: Vec<String> = env::args().collect();
-    let port = args
-        .iter()
-        .position(|a| a == "-port")
-        .and_then(|i| args.get(i + 1))
-        .ok_or(SafeMainError::MissingPort())?;
-
-    let uuid = args
-        .iter()
-        .position(|a| a == "-pluginUUID")
-        .and_then(|i| args.get(i + 1))
-        .ok_or(SafeMainError::MissingPluginUUID())?;
-
-    let register_event = args
-        .iter()
-        .position(|a| a == "-registerEvent")
-        .and_then(|i| args.get(i + 1))
-        .ok_or(SafeMainError::MissingRegisterEvent())?;
-
-    let url = format!("ws://127.0.0.1:{port}");
-
-    log!(
-        logger,
-        "🔌 Connecting to {} with plugin UUID: {} and register event: {}",
-        url,
-        uuid,
-        register_event
-    );
-
-    // Delegate the actual plugin logic to another module
-    run_plugin(url, uuid, register_event, logger).map_err(|_| SafeMainError::PluginError)?;
-
-    Ok(())
 }

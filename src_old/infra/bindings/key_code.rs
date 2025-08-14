@@ -1,6 +1,6 @@
 use num_enum::TryFromPrimitive;
 
-use crate::bindings;
+use crate::infra::bindings;
 
 #[repr(i32)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, TryFromPrimitive)]
@@ -335,7 +335,6 @@ impl MouseCode {
             _ => None, // Mouse6–Mouse20 not supported via SendInput
         }
     }
-
 }
 
 impl bindings::Modifier {

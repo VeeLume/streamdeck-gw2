@@ -5,7 +5,7 @@
   "CodePath": "icu.veelume.gw2.exe",
   "Author": "Veelume",
   "Version": "0.1.0.1",
-  "Description": "Stream Deck plugin for Star Citizen",
+  "Description": "Stream Deck plugin for Guild Wars 2",
   "Icon": "imgs/plugin/category-icon",
   "OS": [
     {

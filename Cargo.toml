@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.98"
 bitflags = { version = "2.9.1", features = ["serde"] }
 bytemuck = { version = "1.23.1", features = ["derive"] }
 chrono = { version = "0.4.41", features = [
@@ -15,6 +16,7 @@ chrono = { version = "0.4.41", features = [
 ] }
 constcat = "0.6.1"
 crossbeam-channel = "0.5.15"
+dashmap = "6.1.0"
 directories = "6.0.0"
 notify = "8.1.0"
 num_enum = "0.7.4"
@@ -40,5 +42,8 @@ windows = { version = "0.61.3", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Foundation",
     "Win32_System_Memory",
+    "Win32_System_Console",
 ] }
 windows-core = "0.61.2"
+streamdeck-lib = { path = "../streamdeck-lib" }
+quick-xml = { version = "0.38.1", features = ["serialize"] }

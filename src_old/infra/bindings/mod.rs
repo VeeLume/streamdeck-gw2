@@ -1,12 +1,162 @@
-use std::{collections::HashMap};
+// src/infra/bindings/mod.rs
+use std::collections::HashMap;
+use std::fs;
+use std::path::{ Path, PathBuf };
+use std::sync::Arc;
 
-use crate::bindings::{ key_control::KeyControl, KeyBind, Key, Modifier, key_code::KeyCode };
+use roxmltree::Document;
+use serde::{ Deserialize, Serialize };
+
+use crate::logger::ActionLog;
+use crate::{ log };
+
+pub mod key_control;
+pub mod key_code;
+pub mod send_keys;
+
+// Re-export for convenience elsewhere:
+pub use key_control::KeyControl;
+pub use key_code::{ KeyCode, MouseCode, SendInputMouseButton };
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, num_enum::TryFromPrimitive, Serialize, Deserialize)]
+pub enum DeviceType {
+    Unset = 0,
+    Mouse = 1,
+    Keyboard = 2,
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Modifier: i32 {
+        const SHIFT = 1;
+        const CTRL  = 2;
+        const ALT   = 4;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Key {
+    pub device_type: DeviceType,
+    pub code: i32,
+    pub modifier: Modifier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyBind {
+    pub primary: Option<Key>,
+    pub secondary: Option<Key>,
+}
+
+/// Public so other modules/tests can use it directly if needed.
+pub fn load_input_bindings(
+    path: &Path,
+    logger: Arc<dyn ActionLog>
+) -> HashMap<KeyControl, KeyBind> {
+    let mut bindings = default_input_bindings();
+
+    let xml_data = match fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) => {
+            log!(logger, "❌ failed to read bindings XML: {}", e);
+            return bindings;
+        }
+    };
+
+    let doc = match Document::parse(&xml_data) {
+        Ok(doc) => doc,
+        Err(e) => {
+            log!(logger, "❌ failed to parse bindings XML: {}", e);
+            return bindings;
+        }
+    };
+
+    for node in doc.descendants().filter(|n| n.has_tag_name("action")) {
+        let control = match
+            node
+                .attribute("id")
+                .and_then(|id| id.parse::<i32>().ok())
+                .and_then(|id| KeyControl::try_from(id).ok())
+        {
+            Some(c) => c,
+            None => {
+                log!(logger, "⚠️ invalid or missing action id");
+                continue;
+            }
+        };
+
+        let bind = bindings
+            .entry(control)
+            .or_insert_with(|| KeyBind { primary: None, secondary: None });
+
+        // Primary
+        if let Some(device_str) = node.attribute("device") {
+            let Some(device_type) = parse_device(device_str, Arc::clone(&logger)) else {
+                continue;
+            };
+            if device_type == DeviceType::Unset {
+                bind.primary = None;
+            } else {
+                let code = parse_code(node.attribute("button"), Arc::clone(&logger));
+                let modifier = parse_modifier(node.attribute("mod"));
+                bind.primary = Some(Key { device_type, code, modifier });
+            }
+        }
+
+        // Secondary
+        if let Some(device_str) = node.attribute("device2") {
+            let Some(device_type) = parse_device(device_str, Arc::clone(&logger)) else {
+                continue;
+            };
+            if device_type == DeviceType::Unset {
+                bind.secondary = None;
+            } else {
+                let code = parse_code(node.attribute("button2"), Arc::clone(&logger));
+                let modifier = parse_modifier(node.attribute("mod2"));
+                bind.secondary = Some(Key { device_type, code, modifier });
+            }
+        }
+    }
+
+    bindings
+}
+
+fn parse_device(s: &str, logger: Arc<dyn ActionLog>) -> Option<DeviceType> {
+    match s {
+        "Mouse" => Some(DeviceType::Mouse),
+        "Keyboard" => Some(DeviceType::Keyboard),
+        "None" => Some(DeviceType::Unset),
+        other => {
+            log!(logger, "⚠️ unknown device type: {}", other);
+            None
+        }
+    }
+}
+
+fn parse_code(attr: Option<&str>, logger: Arc<dyn ActionLog>) -> i32 {
+    match attr.and_then(|c| c.parse::<i32>().ok()) {
+        Some(code) => code,
+        None => {
+            // Old note: LeftAlt had 0, which often shows up as “missing”
+            log!(logger, "⚠️ missing/invalid key code, defaulting to LeftAlt (0)");
+            key_code::KeyCode::LeftAlt as i32
+        }
+    }
+}
+
+fn parse_modifier(attr: Option<&str>) -> Modifier {
+    attr.and_then(|m| m.parse::<i32>().ok())
+        .and_then(Modifier::from_bits)
+        .unwrap_or_else(Modifier::empty)
+}
+
+// ---------------- defaults ----------------
 
 pub fn default_input_bindings() -> HashMap<KeyControl, KeyBind> {
+    // moved from your old bindings/default.rs (unchanged)
+    use crate::infra::bindings::{ key_code::KeyCode, DeviceType::Keyboard, Modifier };
+    use key_control::KeyControl::*;
     let mut map = HashMap::new();
-
-    use crate::bindings::DeviceType::*;
-    use crate::bindings::key_control::KeyControl::*;
 
     macro_rules! bind {
         (
@@ -14,6 +164,7 @@ pub fn default_input_bindings() -> HashMap<KeyControl, KeyBind> {
             primary: ($code1:ident $(, $mod1:ident)*),
             secondary: ($code2:ident $(, $mod2:ident)*)
         ) => {
+        {
             map.insert(
                 $kc,
                 KeyBind {
@@ -29,9 +180,10 @@ pub fn default_input_bindings() -> HashMap<KeyControl, KeyBind> {
                     }),
                 },
             );
+        }
         };
-
         ($kc:ident, primary: ($code1:ident $(, $mod1:ident)*)) => {
+        {
             map.insert(
                 $kc,
                 KeyBind {
@@ -43,10 +195,10 @@ pub fn default_input_bindings() -> HashMap<KeyControl, KeyBind> {
                     secondary: None,
                 },
             );
+        }
         };
     }
 
-    // ✅ Examples with one or two keys
     bind!(MovementMoveForward, primary: (W), secondary: (ArrowUp));
     bind!(MovementMoveBackward, primary: (S), secondary: (ArrowDown));
     bind!(MovementStrafeLeft, primary: (A), secondary: (ArrowLeft));

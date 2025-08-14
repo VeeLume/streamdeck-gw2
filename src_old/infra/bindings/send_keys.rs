@@ -1,11 +1,10 @@
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use std::{ mem::size_of, sync::Arc };
 
-use crate::{
-    bindings::{ self, key_code::{ KeyCode, SendInputMouseButton } },
-    log,
-    logger::ActionLog,
-};
+use crate::infra::bindings::key_code::{ KeyCode, SendInputMouseButton };
+use crate::infra::bindings as bindings;
+use crate::{ log };
+use crate::logger::ActionLog;
 
 const XBUTTON1: u32 = 0x0001;
 const XBUTTON2: u32 = 0x0002;
