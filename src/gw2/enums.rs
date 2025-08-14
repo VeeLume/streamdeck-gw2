@@ -207,3 +207,41 @@ pub enum KeyControl {
     TemplatesEquipmentTemplate8 = 189,
     TemplatesEquipmentTemplate9 = 190,
 }
+
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CharacterData {
+    pub name: String,
+    #[serde(default)]
+    pub build_tabs: Vec<BuildTab>,
+    #[serde(default)]
+    pub equipment_tabs: Vec<EquipmentTab>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BuildTab {
+    #[serde(rename = "tab")]
+    pub tab_index: u8,
+    pub is_active: bool,
+    pub build: Build,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Build {
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EquipmentTab {
+    #[serde(rename = "tab")]
+    pub tab_index: u8,
+    pub name: Option<String>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TemplateNames {
+    /// 1-based slots -> optional display names
+    pub build: [Option<String>; 9],
+    pub equipment: [Option<String>; 9],
+}

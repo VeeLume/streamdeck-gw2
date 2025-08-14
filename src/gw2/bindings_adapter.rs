@@ -11,6 +11,12 @@ use streamdeck_lib::{
 
 use crate::gw2::{ binds::BindingSet, shared::SharedBindings };
 
+/// Publishes:
+/// - "bindings.updated" -> no data, emitted when bindings are updated from file
+///
+/// Listens:
+/// - "bindings-path.set"   -> PathBuf, sets the path to watch for bindings
+/// - "bindings-path.reload" -> no data, reloads the current bindings from the watched file
 pub struct Gw2BindingsAdapter;
 
 impl Gw2BindingsAdapter {
