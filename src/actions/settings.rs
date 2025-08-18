@@ -1,11 +1,10 @@
 use std::sync::atomic::Ordering;
-use std::sync::{ atomic::AtomicBool, Arc };
-
-use constcat::concat;
-use streamdeck_lib::prelude::{ Action, Context, info, debug };
-use streamdeck_lib::sd_protocol::views::*;
+use std::sync::{Arc, atomic::AtomicBool};
 
 use crate::PLUGIN_ID;
+use crate::topics::GW2_BINDINGS_PATH_SET;
+use constcat::concat;
+use streamdeck_lib::prelude::*;
 
 const LONG_PRESS: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -19,44 +18,54 @@ pub struct SettingsAction {
     hold_fired: bool,
 }
 
+impl ActionStatic for SettingsAction {
+    const ID: &'static str = concat!(PLUGIN_ID, ".settings");
+}
+
 impl Action for SettingsAction {
     fn id(&self) -> &str {
-        concat!(PLUGIN_ID, ".settings")
+        Self::ID
     }
 
     fn property_inspector_did_appear(&mut self, cx: &Context, ev: &PropertyInspectorDidAppear) {
-        debug!(cx.log(), "SettingsAction PI appeared for context: {}", ev.context);
+        debug!(
+            cx.log(),
+            "SettingsAction PI appeared for context: {}", ev.context
+        );
         let settings = cx.globals().snapshot();
         cx.sd().set_settings(ev.context, settings);
     }
 
     fn did_receive_settings(&mut self, cx: &Context, ev: &DidReceiveSettings) {
-        debug!(cx.log(), "Received settings for context {}: {:?}", ev.context, ev.settings);
-        // Handle settings update logic here
-        let mut patch = serde_json::Map::new();
-        for (k, v) in ev.settings.iter() {
-            if v.is_null() {
-                patch.insert(k.clone(), serde_json::Value::Null);
-            } else {
-                patch.insert(k.clone(), v.clone());
+        debug!(
+            cx.log(),
+            "Received settings for context {}: {:?}", ev.context, ev.settings
+        );
+
+        cx.globals().with_mut(|globals| {
+            // Update globals with the new settings
+            for (k, v) in ev.settings.iter() {
+                if v.is_null() {
+                    globals.remove(k);
+                } else {
+                    globals.insert(k.clone(), v.clone());
+                }
             }
-        }
-        cx.globals().merge_and_push(cx.sd(), patch);
+        });
 
         // If bindings_file changed, tell the watcher adapter
         let bus = cx.bus();
         if let Some(path) = ev.settings.get("bindings_file").and_then(|v| v.as_str()) {
             // Notify adapters in the OnAppLaunch group (where the watcher lives)
-            bus.adapters_notify_name(
-                "gw2.bindings_watcher".to_string(),
-                "bindings-path.set".to_string(),
-                Some(serde_json::json!(path))
-            );
+            bus.adapters_notify_topic_t(GW2_BINDINGS_PATH_SET, None, path.into());
         }
     }
 
     fn key_down(&mut self, cx: &Context, ev: &KeyDown) {
-        debug!(cx.log(), "SettingsAction key_down for ctx_id: {}", ev.context);
+        debug!(
+            cx.log(),
+            "SettingsAction key_down for ctx_id: {}", ev.context
+        );
         self.hold_fired = false;
         let cancel = Arc::new(AtomicBool::new(false));
         self.hold_cancel = Some(cancel.clone());
@@ -67,11 +76,14 @@ impl Action for SettingsAction {
         std::thread::spawn(move || {
             std::thread::sleep(LONG_PRESS);
             if !cancel.load(Ordering::SeqCst) {
-                cx.globals().remove_keys_and_push(cx.sd(), &["api_key", "bindings_file"]);
+                cx.globals().delete_many(&["api_key", "bindings_file"]);
             }
 
             cx.sd().show_ok(&ctx_id);
-            debug!(cx.log(), "Long press action completed for context: {}", ctx_id);
+            debug!(
+                cx.log(),
+                "Long press action completed for context: {}", ctx_id
+            );
         });
     }
 

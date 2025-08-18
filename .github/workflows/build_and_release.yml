@@ -1,0 +1,124 @@
+name: Build and Release Stream Deck Plugin (Rust)
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    env:
+      # Adjust if your bundle folder is named differently
+      PLUGIN_BUNDLE: icu.veelume.gw2.sdPlugin
+      # The filename inside the bundle the manifest expects
+      BINARY_DST: icu.veelume.gw2.exe
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version (major.minor.patch.build)
+        id: version
+        shell: pwsh
+        run: |
+          $tag="${env:GITHUB_REF_NAME}".TrimStart("v")   # e.g. 1.2.3
+          $build="${{ github.run_number }}"              # monotonically increasing per repo
+          $full="$tag.$build"                            # e.g. 1.2.3.418
+          "tag=$tag"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "build=$build" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "full=$full" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Rust preflight
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features
+          cargo check --all-targets --all-features
+      - name: Validate plugin bundle
+        shell: pwsh
+        run: streamdeck validate "icu.veelume.sc-mapper.sdPlugin"
+
+      - name: Verify Cargo version matches tag
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | Out-String | ConvertFrom-Json
+          $root = $meta.packages | Where-Object { $_.manifest_path -eq (Resolve-Path .\Cargo.toml).Path }
+          if (-not $root) { throw "Could not detect crate" }
+          $cargoVer = $root.version
+          $tagVer = "${{ steps.version.outputs.tag }}"
+          if ($cargoVer -ne $tagVer) {
+            throw "Cargo.toml version ($cargoVer) != tag ($tagVer)"
+          }
+
+
+      - name: Build (release)
+        shell: pwsh
+        run: cargo build --release
+
+      - name: Detect crate binary name
+        id: crate
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | Out-String | ConvertFrom-Json
+          $root = $meta.packages | Where-Object { $_.manifest_path -eq (Resolve-Path .\Cargo.toml).Path }
+          if (-not $root) { throw "Could not detect crate name" }
+          "name=$($root.name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Place binary into .sdPlugin bundle
+        shell: pwsh
+        env:
+          BIN_NAME: ${{ steps.crate.outputs.name }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:PLUGIN_BUNDLE" | Out-Null
+          $src = "target\release\${env:BIN_NAME}.exe"
+          if (!(Test-Path $src)) { throw "Missing built exe at $src" }
+          Copy-Item $src "$env:PLUGIN_BUNDLE\$env:BINARY_DST" -Force
+
+      - name: Sync manifest version to tag+build
+        shell: pwsh
+        run: |
+          $manifest = Join-Path $env:PLUGIN_BUNDLE 'manifest.json'
+          if (Test-Path $manifest) {
+            $j = Get-Content $manifest -Raw | ConvertFrom-Json
+            $j.Version = "${{ steps.version.outputs.full }}"  # 1.2.3.418
+            $j | ConvertTo-Json -Depth 64 | Set-Content $manifest -Encoding UTF8
+          } else {
+            Write-Host "No manifest.json at $manifest (skipping)"
+          }
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Stream Deck CLI
+        shell: pwsh
+        run: npm install -g @elgato/cli@latest
+
+      - name: Pack .streamDeckPlugin
+        shell: pwsh
+        run: streamdeck pack "$env:PLUGIN_BUNDLE"
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamDeckPlugin
+          path: "*.streamDeckPlugin"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.streamDeckPlugin"
+          fail_on_unmatched_files: true
+          generate_release_notes: true

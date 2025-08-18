@@ -1,26 +1,19 @@
 #![cfg(windows)]
 
-use std::{ slice, thread, time::Duration };
 use std::sync::Arc;
+use std::{slice, thread, time::Duration};
 
 use bitflags::bitflags;
-use bytemuck::{ Pod, Zeroable };
-use crossbeam_channel::{ bounded, select, tick, Receiver as CbReceiver };
+use bytemuck::{Pod, Zeroable};
+use crossbeam_channel::{Receiver as CbReceiver, bounded, select, tick};
 use serde::Deserialize;
-use serde_json::json;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Memory::*;
 
-use streamdeck_lib::{
-    adapters::{ Adapter, AdapterHandle, AdapterNotify, StartPolicy },
-    bus::Bus,
-    prelude::Context,
-    debug,
-    warn,
-    info,
-};
+use streamdeck_lib::prelude::*;
 
-use crate::gw2::shared::{ ActiveChar, InCombat };
+use crate::gw2::shared::{ActiveChar, InCombat};
+use crate::topics::{MUMBLE_ACTIVE_CHARACTER, MUMBLE_COMBAT, MUMBLE_FAST, MUMBLE_SLOW};
 
 /// Publishes:
 /// - "mumble.combat"           -> bool
@@ -47,21 +40,24 @@ impl Adapter for MumbleAdapter {
     }
 
     fn topics(&self) -> &'static [&'static str] {
-        &["mumble.fast", "mumble.slow"]
+        &[MUMBLE_FAST.name, MUMBLE_SLOW.name]
     }
 
     fn start(
         &self,
         cx: &Context,
         bus: Arc<dyn Bus>,
-        inbox: CbReceiver<AdapterNotify>
-    ) -> Result<AdapterHandle, String> {
+        inbox: CbReceiver<Arc<ErasedTopic>>,
+    ) -> AdapterResult {
         let (stop_tx, stop_rx) = bounded::<()>(1);
         let logger = cx.log().clone();
-        let in_combat_ext = cx.try_ext::<InCombat>().expect("InCombat extension not found").clone();
+        let in_combat_ext = cx
+            .try_ext::<InCombat>()
+            .expect("InCombat extension not found")
+            .clone();
         let active_char_ext = cx
             .try_ext::<ActiveChar>()
-            .expect("ActiveChar extension not found")
+            .ok_or(AdapterError::Init("ActiveChar extension not found".into()))?
             .clone();
 
         let join = thread::spawn(move || {
@@ -85,21 +81,19 @@ impl Adapter for MumbleAdapter {
                 select! {
                     recv(inbox) -> msg => {
                         match msg {
-                            Ok(AdapterNotify { topic, .. }) => match topic.as_str() {
-                                "mumble.fast" => {
+                            Ok(note) => {
+                                if note.downcast(MUMBLE_FAST).is_some() {
                                     fast = true;
                                     ticker = tick(FAST);
                                     debug!(logger, "🎚️ mumble mode -> FAST (combat only)");
                                     // keep last_name as-is; we aren't emitting names in fast
-                                }
-                                "mumble.slow" => {
+                                } else if note.downcast(MUMBLE_SLOW).is_some() {
                                     fast = false;
                                     ticker = tick(SLOW);
                                     debug!(logger, "🎚️ mumble mode -> SLOW (combat + identity)");
                                     // force a fresh name emit next slow tick
                                     last_name = None;
                                 }
-                                _ => {}
                             },
                             Err(_) => break, // inbox closed
                         }
@@ -139,7 +133,11 @@ impl Adapter for MumbleAdapter {
                                 if last_in_combat != Some(in_combat) {
                                     last_in_combat = Some(in_combat);
                                     in_combat_ext.set(in_combat);
-                                    bus.action_notify_all("mumble.combat".to_string(), Some(json!(in_combat)));
+                                    bus.action_notify_topic_t(
+                                        MUMBLE_COMBAT,
+                                        None,
+                                        in_combat,
+                                    );
                                 }
 
                                 // identity only when parsed (slow mode)
@@ -148,7 +146,11 @@ impl Adapter for MumbleAdapter {
                                     if last_name.as_deref() != Some(name.as_str()) {
                                         last_name = Some(name.clone());
                                         active_char_ext.set(Some(name.clone()));
-                                        bus.action_notify_all("mumble.active-character".to_string(), Some(json!(name)));
+                                        bus.action_notify_topic_t(
+                                            MUMBLE_ACTIVE_CHARACTER,
+                                            None,
+                                            name,
+                                        );
                                     }
                                 }
                             } else {
@@ -167,12 +169,7 @@ impl Adapter for MumbleAdapter {
             info!(logger, "🛑 Mumble adapter stopped");
         });
 
-        Ok(AdapterHandle {
-            join: Some(join),
-            shutdown: Box::new(move || {
-                let _ = stop_tx.send(());
-            }),
-        })
+        Ok(AdapterHandle::from_crossbeam(join, stop_tx))
     }
 }
 
@@ -260,11 +257,9 @@ pub struct MumbleLink {
 
 impl MumbleLink {
     pub fn new() -> Result<Self, String> {
-        let handle = (
-            unsafe {
-                OpenFileMappingW(FILE_MAP_READ.0, false, windows_core::w!("MumbleLink"))
-            }
-        ).map_err(|_| "OpenFileMappingW(MumbleLink) failed".to_string())?;
+        let handle =
+            (unsafe { OpenFileMappingW(FILE_MAP_READ.0, false, windows_core::w!("MumbleLink")) })
+                .map_err(|_| "OpenFileMappingW(MumbleLink) failed".to_string())?;
 
         let ptr = unsafe { MapViewOfFile(handle, FILE_MAP_READ, 0, 0, SHARED_MEM_SIZE) };
         if ptr.Value.is_null() {
@@ -274,7 +269,10 @@ impl MumbleLink {
             return Err("MapViewOfFile failed".to_string());
         }
 
-        Ok(MumbleLink { map_handle: handle, view_ptr: ptr })
+        Ok(MumbleLink {
+            map_handle: handle,
+            view_ptr: ptr,
+        })
     }
 
     /// Returns (UiState, Identity) if read succeeded.
@@ -284,20 +282,18 @@ impl MumbleLink {
             let bytes = slice::from_raw_parts(self.view_ptr.Value as *const u8, SHARED_MEM_SIZE);
             let lm: LinkedMem = *bytemuck::from_bytes::<LinkedMem>(bytes);
 
-            let ctx = bytemuck
-                ::try_from_bytes::<MumbleContext>(
-                    &lm.context[..std::mem::size_of::<MumbleContext>()]
-                )
-                .ok()?
-                .to_owned();
+            let ctx = bytemuck::try_from_bytes::<MumbleContext>(
+                &lm.context[..std::mem::size_of::<MumbleContext>()],
+            )
+            .ok()?
+            .to_owned();
             let ui = UiState::from_bits_truncate(ctx.ui_state);
 
             let ident = if parse_identity {
-                let s = String::from_utf16_lossy(&lm.identity).trim_end_matches('\0').to_string();
-                let upto = s
-                    .find('}')
-                    .map(|i| i + 1)
-                    .unwrap_or(s.len());
+                let s = String::from_utf16_lossy(&lm.identity)
+                    .trim_end_matches('\0')
+                    .to_string();
+                let upto = s.find('}').map(|i| i + 1).unwrap_or(s.len());
                 let s = &s[..upto];
                 if s.trim_start().starts_with('{') {
                     serde_json::from_str::<Identity>(s).ok()

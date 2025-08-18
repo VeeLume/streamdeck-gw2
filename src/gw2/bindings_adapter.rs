@@ -1,15 +1,13 @@
 // src/gw2/bindings_adapter.rs
-use std::{ fs, path::PathBuf, thread, time::Duration };
-use crossbeam_channel::{ bounded, select, Receiver as CbReceiver };
-use notify::{ Event, RecommendedWatcher, RecursiveMode, Watcher };
-use streamdeck_lib::{
-    adapters::{ Adapter, AdapterHandle, AdapterNotify, StartPolicy },
-    context::Context,
-    logger::Level,
-    bus::{ Bus },
-};
+use crossbeam_channel::{Receiver as CbReceiver, bounded, select};
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use std::{fs, path::PathBuf, sync::Arc, thread, time::Duration};
+use streamdeck_lib::prelude::*;
 
-use crate::gw2::{ binds::BindingSet, shared::SharedBindings };
+use crate::{
+    gw2::{binds::BindingSet, shared::SharedBindings},
+    topics::{GW2_BINDINGS_PATH_RELOAD, GW2_BINDINGS_PATH_SET},
+};
 
 /// Publishes:
 /// - "bindings.updated" -> no data, emitted when bindings are updated from file
@@ -35,15 +33,15 @@ impl Adapter for Gw2BindingsAdapter {
     }
 
     fn topics(&self) -> &'static [&'static str] {
-        &["bindings-path.set", "bindings-path.reload"]
+        &[GW2_BINDINGS_PATH_SET.name, GW2_BINDINGS_PATH_RELOAD.name]
     }
 
     fn start(
         &self,
         cx: &Context,
         bus: std::sync::Arc<dyn Bus>,
-        inbox: CbReceiver<AdapterNotify>
-    ) -> Result<AdapterHandle, String> {
+        inbox: CbReceiver<Arc<ErasedTopic>>,
+    ) -> AdapterResult {
         // Channel to stop the worker
         let (stop_tx, stop_rx) = bounded::<()>(1);
 
@@ -58,7 +56,9 @@ impl Adapter for Gw2BindingsAdapter {
         let shared_binds = match cx.try_ext::<SharedBindings>() {
             Some(b) => b,
             None => {
-                return Err("SharedBindings extension not found".to_string());
+                return Err(AdapterError::Init(
+                    "SharedBindings extension not found".into(),
+                ));
             }
         };
         let logger = cx.log().clone();
@@ -77,58 +77,58 @@ impl Adapter for Gw2BindingsAdapter {
                 match notify::recommended_watcher(notify_tx.clone()) {
                     Ok(mut w) => {
                         if let Err(e) = w.watch(path, RecursiveMode::NonRecursive) {
-                            bus.log(format!("watch error: {e}"), Level::Warn);
+                            bus.log(&format!("watch error: {e}"), Level::Warn);
                         } else {
                             watcher = Some(w);
-                            bus.log(format!("watching file: {}", path.display()), Level::Info);
+                            bus.log(&format!("watching file: {}", path.display()), Level::Info);
                         }
                     }
-                    Err(e) => bus.log(format!("create watcher failed: {e}"), Level::Error),
+                    Err(e) => bus.log(&format!("create watcher failed: {e}"), Level::Error),
                 }
             };
 
             // helper to update bindings from file
             let update_bindings_from_file = |path: &PathBuf| {
                 bus.log(
-                    format!("Updating bindings from file: {}", path.display()),
-                    Level::Info
+                    &format!("Updating bindings from file: {}", path.display()),
+                    Level::Info,
                 );
                 let mut new_binds = BindingSet::with_default();
                 if let Ok(content) = fs::read_to_string(path) {
                     new_binds.patch_from_xml(content.as_str(), logger.clone());
                 } else {
                     bus.log(
-                        format!("Failed to read bindings file: {}", path.display()),
-                        Level::Error
+                        &format!("Failed to read bindings file: {}", path.display()),
+                        Level::Error,
                     );
                 }
 
                 match shared_binds.replace_bindings(new_binds) {
                     Ok(_) => {
-                        bus.log("Bindings updated successfully.".to_string(), Level::Info);
+                        bus.log("Bindings updated successfully.", Level::Info);
                         // Optionally write to globals if needed
                         if let Err(e) = shared_binds.write_to_globals(cx.globals(), cx.sd()) {
                             bus.log(
-                                format!("Failed to write bindings to globals: {}", e),
-                                Level::Error
+                                &format!("Failed to write bindings to globals: {e}"),
+                                Level::Error,
                             );
                         }
-                        bus.action_notify_all("bindings.updated".to_string(), None);
+                        bus.action_notify_topic_t(GW2_BINDINGS_PATH_RELOAD, None, ());
                     }
                     Err(e) => {
-                        bus.log(format!("Failed to replace bindings: {}", e), Level::Error);
+                        bus.log(&format!("Failed to replace bindings: {e}"), Level::Error);
                     }
                 }
             };
 
-            bus.log(format!("Watched Path: {:?}", watched_path), Level::Debug);
+            bus.log(&format!("Watched Path: {watched_path:?}"), Level::Debug);
             // Kick off if we had a path at boot
             if let Some(p) = watched_path.clone() {
                 update_bindings_from_file(&p);
                 rewatch(&p);
             }
 
-            bus.log("Bindings watcher started.".to_string(), Level::Info);
+            bus.log("Bindings watcher started.", Level::Info);
             // Bridge std::sync::mpsc (notify) with crossbeam select via try_recv
             loop {
                 // 1) Handle adapter inbox
@@ -136,46 +136,43 @@ impl Adapter for Gw2BindingsAdapter {
                     recv(inbox) -> msg => {
                         match msg {
                             Ok(note) => {
-                                match note.topic.as_str() {
-                                    "bindings-path.set" => {
-                                        if let Some(v) = note.data.as_ref().and_then(|v| v.as_str()) {
-                                            let p = PathBuf::from(v);
-                                            watched_path = Some(p.clone());
-                                            update_bindings_from_file(&p);
-                                            rewatch(&p);
-                                        }
-                                    }
-                                    "bindings-path.reload" => {
-                                        if let Some(p) = watched_path.clone() {
-                                            update_bindings_from_file(&p);
-                                            rewatch(&p);
-                                        }
-                                    }
-                                    _ => { /* ignore */ }
+                                if let Some(t) = note.downcast(GW2_BINDINGS_PATH_SET) {
+                                    let p = PathBuf::from(t);
+                                    watched_path= Some(p.clone());
+                                    update_bindings_from_file(&p);
+                                    rewatch(&p);
                                 }
+
+                                if note.downcast(GW2_BINDINGS_PATH_RELOAD).is_some() {
+                                    if let Some(p) = watched_path.clone() {
+                                        update_bindings_from_file(&p);
+                                        rewatch(&p);
+                                    }
+                                }
+
                             }
                             Err(_) => break, // inbox closed
                         }
                     }
                     recv(stop_rx) -> _ => {
-                        bus.log("Stopping bindings watcher...".to_string(), Level::Debug);
+                        bus.log("Stopping bindings watcher...", Level::Debug);
                         break;
                      }
                     default(Duration::from_millis(100)) => {
                         // 2) Poll notify events
                         match notify_rx.try_recv() {
                             Ok(Ok(_)) => {
-                                bus.log("Bindings file changed, reloading...".to_string(), Level::Info);
-                                update_bindings_from_file(&watched_path.as_ref().unwrap());
+                                bus.log("Bindings file changed, reloading...", Level::Info);
+                                update_bindings_from_file(watched_path.as_ref().unwrap());
                             }
                             Ok(Err(e)) => {
-                                bus.log(format!("notify error: {e}"), Level::Warn);
+                                bus.log(&format!("notify error: {e}"), Level::Warn);
                             }
                             Err(std::sync::mpsc::TryRecvError::Empty) => {
                                 // No events, continue
                             }
                             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                bus.log("notify channel disconnected".into(), Level::Warn);
+                                bus.log("notify channel disconnected", Level::Warn);
                                 break;
                             }
                         }
@@ -184,11 +181,6 @@ impl Adapter for Gw2BindingsAdapter {
             }
         });
 
-        Ok(AdapterHandle {
-            join: Some(join),
-            shutdown: Box::new(move || {
-                let _ = stop_tx.send(());
-            }),
-        })
+        Ok(AdapterHandle::from_crossbeam(join, stop_tx))
     }
 }

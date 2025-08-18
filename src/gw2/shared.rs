@@ -1,11 +1,11 @@
 // src/gw2/shared.rs
-use std::sync::{ Arc, RwLock };
+use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
 use serde_json::Map;
-use streamdeck_lib::prelude::{ GlobalSettings, SdClient };
+use streamdeck_lib::prelude::{GlobalSettings, SdClient};
 
-use crate::gw2::{ binds::BindingSet, enums::TemplateNames };
+use crate::gw2::{binds::BindingSet, enums::TemplateNames};
 
 /// Arc<RwLock<…>> so SettingsAction can update at runtime and mappers read it.
 #[derive(Clone)]
@@ -24,7 +24,7 @@ impl SharedBindings {
 
     pub fn replace_from_globals(
         &self,
-        globals: &Map<String, serde_json::Value>
+        globals: &Map<String, serde_json::Value>,
     ) -> Result<(), String> {
         if let Some(bindings) = globals.get("bindings") {
             if let Ok(new_binds) = serde_json::from_value::<BindingSet>(bindings.clone()) {
@@ -42,7 +42,7 @@ impl SharedBindings {
         let binds_json = serde_json::to_value(&*binds).map_err(|e| e.to_string())?;
         let mut patch = serde_json::Map::new();
         patch.insert("bindings".to_string(), binds_json);
-        globals.merge_and_push(sd, patch);
+        globals.set("bindings", serde_json::Value::Object(patch));
         Ok(())
     }
 }
@@ -72,7 +72,10 @@ impl TemplateStore {
 
     /// Retain only entries that satisfy the given predicate.
     /// Example: store.retain(|name, _| new_map.contains_key(name))
-    pub fn retain<F>(&self, f: F) where F: FnMut(&String, &mut TemplateNames) -> bool {
+    pub fn retain<F>(&self, f: F)
+    where
+        F: FnMut(&String, &mut TemplateNames) -> bool,
+    {
         self.0.retain(f);
     }
 }
@@ -81,10 +84,7 @@ impl TemplateStore {
 pub struct ActiveChar(Arc<RwLock<Option<String>>>);
 impl ActiveChar {
     pub fn get(&self) -> Option<String> {
-        self.0
-            .read()
-            .ok()
-            .and_then(|g| g.clone())
+        self.0.read().ok().and_then(|g| g.clone())
     }
     pub fn set(&self, v: Option<String>) {
         if let Ok(mut w) = self.0.write() {
@@ -97,11 +97,7 @@ impl ActiveChar {
 pub struct InCombat(Arc<RwLock<bool>>);
 impl InCombat {
     pub fn get(&self) -> bool {
-        self.0
-            .read()
-            .ok()
-            .map(|g| *g)
-            .unwrap_or(false)
+        self.0.read().ok().map(|g| *g).unwrap_or(false)
     }
     pub fn set(&self, v: bool) {
         if let Ok(mut w) = self.0.write() {

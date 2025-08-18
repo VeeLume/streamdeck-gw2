@@ -2,15 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bitflags::bitflags;
-use serde::{ Deserialize, Serialize };
-use streamdeck_lib::{
-    input::{ InputStep, Key, MouseButton },
-    logger::ActionLog,
-    prelude::{ chord, click, down, up },
-    warn,
-};
+use serde::{Deserialize, Serialize};
+use streamdeck_lib::prelude::*;
 
-use super::enums::{ KeyControl };
+use super::enums::KeyControl;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Device {
@@ -32,7 +27,7 @@ bitflags! {
 pub struct Binding {
     pub device: Device,
     pub mods: Mods,
-    pub key: Option<Key>, // when device=Keyboard
+    pub key: Option<Key>,           // when device=Keyboard
     pub mouse: Option<MouseButton>, // when device=Mouse
 }
 
@@ -53,7 +48,7 @@ impl Binding {
 
         match self.device {
             Device::Unset => {
-                return None; // no action
+                None // no action
             }
             Device::Keyboard => {
                 let Some(main) = self.key else {
@@ -92,7 +87,9 @@ pub struct BindingSet {
 
 impl BindingSet {
     pub fn new() -> Self {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     pub fn get(&self, kc: KeyControl) -> Option<&[Binding]> {
@@ -308,12 +305,22 @@ impl BindingSet {
 
 #[inline]
 fn kb_key(k: Key, mods: Mods) -> Binding {
-    Binding { device: Device::Keyboard, mods, key: Some(k), mouse: None }
+    Binding {
+        device: Device::Keyboard,
+        mods,
+        key: Some(k),
+        mouse: None,
+    }
 }
 
 #[inline]
 fn ms_btn(b: MouseButton, mods: Mods) -> Binding {
-    Binding { device: Device::Mouse, mods, key: None, mouse: Some(b) }
+    Binding {
+        device: Device::Mouse,
+        mods,
+        key: None,
+        mouse: Some(b),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,7 +351,9 @@ struct ActionEntry {
 fn to_binding(dev: Option<&str>, btn: Option<i32>, mods: Option<i32>) -> Option<Binding> {
     let dev = dev?;
     let btn = btn?;
-    let mods = mods.and_then(|m| Mods::from_bits(m as u8)).unwrap_or(Mods::empty());
+    let mods = mods
+        .and_then(|m| Mods::from_bits(m as u8))
+        .unwrap_or(Mods::empty());
 
     match dev {
         "Keyboard" => {
@@ -355,13 +364,12 @@ fn to_binding(dev: Option<&str>, btn: Option<i32>, mods: Option<i32>) -> Option<
             let mouse = mouse_from_gw2_code(btn)?;
             Some(ms_btn(mouse, mods))
         }
-        "None" =>
-            Some(Binding {
-                device: Device::Unset,
-                mods,
-                key: None,
-                mouse: None,
-            }),
+        "None" => Some(Binding {
+            device: Device::Unset,
+            mods,
+            key: None,
+            mouse: None,
+        }),
         _ => None,
     }
 }
@@ -375,7 +383,7 @@ fn mouse_from_gw2_code(code: i32) -> Option<MouseButton> {
         3 => Some(X(1)),
         4 => Some(X(2)),
         5..=20 => Some(X(code as u16)), // Mouse6–Mouse
-        _ => None, // unsupported / exotic
+        _ => None,                      // unsupported / exotic
     }
 }
 
@@ -409,7 +417,7 @@ fn key_from_gw2_code(code: i32) -> Option<Key> {
         24 => Some(Home),
         25 => Some(Insert),
         26 => Some(PageDown), // Next
-        27 => Some(PageUp), // Prior
+        27 => Some(PageUp),   // Prior
         28 => Some(ArrowDown),
         29 => Some(ArrowLeft),
         30 => Some(ArrowRight),

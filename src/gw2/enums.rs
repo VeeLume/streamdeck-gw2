@@ -1,5 +1,5 @@
 use num_enum::TryFromPrimitive;
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive, Serialize, Deserialize)]
@@ -208,7 +208,6 @@ pub enum KeyControl {
     TemplatesEquipmentTemplate9 = 190,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct CharacterData {
     pub name: String,
@@ -244,4 +243,12 @@ pub struct TemplateNames {
     /// 1-based slots -> optional display names
     pub build: [Option<String>; 9],
     pub equipment: [Option<String>; 9],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterChange {
+    /// Character was added
+    Added,
+    /// Character was removed
+    Removed,
 }

@@ -1,90 +1,112 @@
-use std::fmt::Write as _;
 use constcat::concat;
-use serde_json::{ json, Map, Value };
+use serde_json::{Map, Value};
+use std::fmt::Write as _;
 
-use streamdeck_lib::{ actions::{ Action }, prelude::Context, info, debug, sd_protocol::views::* };
+use streamdeck_lib::prelude::*;
 
 use crate::{
-    gw2::{
-        enums::{ KeyControl, TemplateNames }, // { build: [Option<String>; 9], equipment: [Option<String>; 9] }
-        shared::{ ActiveChar, TemplateStore },
-    },
     PLUGIN_ID,
+    gw2::{
+        enums::{KeyControl, TemplateNames}, // { build: [Option<String>; 9], equipment: [Option<String>; 9] }
+        shared::{ActiveChar, TemplateStore},
+    },
+    topics::{
+        GW2_API_CHARACTER_CHANGED, GW2_API_TEMPLATE_CHANGED, GW2_EXEC_QUEUE, Gw2ExecQueue,
+        MUMBLE_ACTIVE_CHARACTER,
+    },
 };
 
 // ── Action ────────────────────────────────────────────────────────────────────
 
 #[derive(Default)]
 pub struct SetTemplateAction {
-    selected_build: Option<u8>, // 1..=9
+    selected_build: Option<u8>,     // 1..=9
     selected_equipment: Option<u8>, // 1..=9
     last_title: Option<String>,
 }
 
+impl ActionStatic for SetTemplateAction {
+    const ID: &'static str = concat!(PLUGIN_ID, ".set-template");
+}
+
 impl Action for SetTemplateAction {
     fn id(&self) -> &str {
-        concat!(PLUGIN_ID, ".set-template")
+        Self::ID
+    }
+
+    fn topics(&self) -> &'static [&'static str] {
+        &[
+            MUMBLE_ACTIVE_CHARACTER.name,
+            MUMBLE_ACTIVE_CHARACTER.name,
+            GW2_API_CHARACTER_CHANGED.name,
+        ]
     }
 
     fn init(&mut self, cx: &Context, ctx_id: &str) {
-        info!(cx.log(), "SetTemplateAction initialized for context: {}", ctx_id);
+        info!(
+            cx.log(),
+            "SetTemplateAction initialized for context: {}", ctx_id
+        );
         // Nothing persistent to subscribe here; we rebuild title on each appear/settings event.
         // If you add an action-level notify hook, just call `self.refresh_title(cx, ctx_id)`.
     }
 
     fn did_receive_settings(&mut self, cx: &Context, ev: &DidReceiveSettings) {
-        self.apply_settings_json(&ev.settings, cx, &ev.context);
+        self.apply_settings_json(ev.settings, cx, ev.context);
     }
 
     fn will_appear(&mut self, cx: &Context, ev: &WillAppear) {
         debug!(cx.log(), "SetTemplateAction will_appear: {:?}", ev.context);
-        self.apply_settings_json(&ev.settings, cx, &ev.context);
+        self.apply_settings_json(ev.settings, cx, ev.context);
         debug!(cx.log(), "Refreshing title for context: {}", ev.context);
-        self.refresh_title(cx, &ev.context);
+        self.refresh_title(cx, ev.context);
     }
 
-    fn on_notify(
-        &mut self,
-        cx: &Context,
-        ctx_id: &str,
-        topic: &str,
-        data: &Option<serde_json::Value>
-    ) {
+    fn on_notify(&mut self, cx: &Context, ctx_id: &str, event: &ErasedTopic) {
         // Recompute title whenever inputs it depends on might change.
-        match topic {
-            // dashed, not underscored
-            "mumble.active-character" => {
-                debug!(cx.log(), "Refreshing title due to topic: {}", topic);
+        if let Some(m) = event.downcast(MUMBLE_ACTIVE_CHARACTER) {
+            debug!(cx.log(), "Received Mumble active character event: {:?}", m);
+            self.refresh_title(cx, ctx_id);
+            return;
+        }
+
+        if let Some(m) = event.downcast(GW2_API_CHARACTER_CHANGED) {
+            debug!(
+                cx.log(),
+                "Received GW2 API character changed event: {:?}", m
+            );
+            // Only refresh if the event concerns the active character
+            let active = cx
+                .try_ext::<ActiveChar>()
+                .and_then(|a| a.get())
+                .unwrap_or_default(); // "" allowed
+
+            if m.name == active {
+                debug!(
+                    cx.log(),
+                    "Refreshing title due to GW2 API change for active character: {}", active
+                );
                 self.refresh_title(cx, ctx_id);
             }
-            "gw2-api.template-changed" | "gw2-api.character-changed" => {
-                // refresh only if the event concerns the active character
-                let active = cx
-                    .try_ext::<ActiveChar>()
-                    .and_then(|a| a.get())
-                    .unwrap_or_default(); // "" allowed
+            return;
+        }
 
-                if
-                    let Some(evt_name) = data
-                        .as_ref()
-                        .and_then(|v| v.get("name"))
-                        .and_then(|v| v.as_str())
-                {
-                    if evt_name == active {
-                        debug!(
-                            cx.log(),
-                            "Refreshing title due to topic: {} (active={})",
-                            topic,
-                            active
-                        );
-                        self.refresh_title(cx, ctx_id);
-                    }
-                } else {
-                    // No name in payload (e.g. summary) — be conservative
-                    self.refresh_title(cx, ctx_id);
-                }
+        if let Some(m) = event.downcast(GW2_API_TEMPLATE_CHANGED) {
+            debug!(cx.log(), "Received GW2 API template changed event: {:?}", m);
+            // Only refresh if the event concerns the active character
+            let active = cx
+                .try_ext::<ActiveChar>()
+                .and_then(|a| a.get())
+                .unwrap_or_default(); // "" allowed
+
+            if m.name == active {
+                debug!(
+                    cx.log(),
+                    "Refreshing title due to GW2 API template change for active character: {}",
+                    active
+                );
+                self.refresh_title(cx, ctx_id);
             }
-            _ => {}
         }
     }
 
@@ -107,26 +129,22 @@ impl Action for SetTemplateAction {
             return;
         }
 
-        // Example policy: don’t allow in combat
-        let allow_in_combat = false;
-
-        // You should have a bus handle reachable; many setups expose it via Context.
-        // If not, pass Arc<dyn Bus> into the action when you construct it.
-        cx.bus().adapters_notify_topic(
-            "gw2-exec.queue".to_string(),
-            Some(
-                json!({
-                "controls": controls,
-                "allow_in_combat": allow_in_combat,
-                // optional: adjust pacing between controls
-                "inter_control_ms": 40u64
-            })
-            )
+        cx.bus().adapters_notify_topic_t(
+            GW2_EXEC_QUEUE,
+            None,
+            Gw2ExecQueue {
+                controls,
+                allow_in_combat: false,
+                inter_control_ms: None, // optional pacing between controls
+            },
         );
     }
 
     fn key_up(&mut self, cx: &Context, ev: &KeyUp) {
-        debug!(cx.log(), "SetTemplateAction key_up for ctx_id: {}", ev.context);
+        debug!(
+            cx.log(),
+            "SetTemplateAction key_up for ctx_id: {}", ev.context
+        );
         // No-op. If you prefer “press on key-up”, move the executor here.
     }
 }
@@ -135,7 +153,9 @@ impl Action for SetTemplateAction {
 
 impl SetTemplateAction {
     fn refresh_title(&mut self, cx: &Context, cx_id: &str) {
-        let title = self.compute_title(cx).unwrap_or_else(|| self.compute_fallback_title());
+        let title = self
+            .compute_title(cx)
+            .unwrap_or_else(|| self.compute_fallback_title());
         if self.last_title.as_deref() != Some(title.as_str()) {
             self.last_title = Some(title.clone());
             cx.sd().set_title(cx_id, Some(title), None, None);
@@ -157,13 +177,13 @@ impl SetTemplateAction {
 
         debug!(
             cx.log(),
-            "settings -> build={:?} equipment={:?}",
-            self.selected_build,
-            self.selected_equipment
+            "settings -> build={:?} equipment={:?}", self.selected_build, self.selected_equipment
         );
 
         // Try to build a pretty title using TemplateStore + active character ("" allowed)
-        let title = self.compute_title(cx).unwrap_or_else(|| self.compute_fallback_title());
+        let title = self
+            .compute_title(cx)
+            .unwrap_or_else(|| self.compute_fallback_title());
 
         cx.sd().set_title(cx_id, Some(title), None, None);
     }
@@ -193,7 +213,8 @@ impl SetTemplateAction {
 
         if let Some(b) = self.selected_build {
             let idx = (b as usize).saturating_sub(1);
-            let label = names.build
+            let label = names
+                .build
                 .get(idx)
                 .and_then(|o| o.as_ref())
                 .map(|s| wrap_title_or_fallback(s, &format!("Build {b}"), 10))
@@ -203,7 +224,8 @@ impl SetTemplateAction {
 
         if let Some(e) = self.selected_equipment {
             let idx = (e as usize).saturating_sub(1);
-            let label = names.equipment
+            let label = names
+                .equipment
                 .get(idx)
                 .and_then(|o| o.as_ref())
                 .map(|s| wrap_title_or_fallback(s, &format!("Equip {e}"), 10))
@@ -260,7 +282,7 @@ fn wrap_title(title: &str, max_len: usize) -> String {
     if out.is_empty() {
         // title had no whitespace or was empty — still clamp hard to avoid long single-line strings
         let mut s = String::new();
-        let _ = write!(&mut s, "{}", title);
+        let _ = write!(&mut s, "{title}");
         return s;
     }
 

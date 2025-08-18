@@ -1,39 +1,18 @@
 #![cfg(windows)]
 
-use std::{ collections::VecDeque, sync::Arc, thread, time::Duration };
-use crossbeam_channel::{ bounded, select, Receiver as CbReceiver };
-use serde::Deserialize;
+use crossbeam_channel::{Receiver as CbReceiver, bounded, select};
+use std::{collections::VecDeque, sync::Arc, thread, time::Duration};
 
-use streamdeck_lib::{
-    adapters::{ Adapter, AdapterHandle, AdapterNotify, StartPolicy },
-    bus::Bus,
-    debug,
-    error,
-    info,
-    input::{ InputStep, InputSynth },
-    prelude::Context,
-    warn,
-};
+use streamdeck_lib::prelude::*;
 
-use crate::gw2::shared::{ SharedBindings, InCombat };
-use crate::gw2::enums::KeyControl;
+use crate::gw2::shared::{InCombat, SharedBindings};
+use crate::topics::{GW2_EXEC_QUEUE, Gw2ExecQueue, MUMBLE_FAST, MUMBLE_SLOW};
 
 // Use the Windows synth (or swap behind a feature if you want)
 use streamdeck_lib::input::WinSynth;
 
-#[derive(Debug, Deserialize, Clone)]
-struct ExecRequest {
-    /// Controls to run, in order. We take the first binding for each control.
-    controls: Vec<KeyControl>,
-    /// If false, this job must wait for "not in combat".
-    allow_in_combat: bool,
-    /// Optional delay (ms) between controls within this job (default 35ms)
-    #[serde(default)]
-    inter_control_ms: Option<u64>,
-}
-
 struct Job {
-    req: ExecRequest,
+    req: Gw2ExecQueue,
     /// Pre-expanded steps; built when the job is enqueued so we can log errors early.
     steps: Vec<streamdeck_lib::prelude::InputStep>,
 }
@@ -57,21 +36,25 @@ impl Adapter for Gw2ExecAdapter {
 
     fn topics(&self) -> &'static [&'static str] {
         // Single ingress for execution requests
-        &["gw2-exec.queue"]
+        &[GW2_EXEC_QUEUE.name]
     }
 
     fn start(
         &self,
         cx: &Context,
         bus: Arc<dyn Bus>,
-        inbox: CbReceiver<AdapterNotify>
-    ) -> Result<AdapterHandle, String> {
+        inbox: CbReceiver<Arc<ErasedTopic>>,
+    ) -> AdapterResult {
         // Stop signal
         let (stop_tx, stop_rx) = bounded::<()>(1);
 
         // Required extensions
-        let binds = cx.try_ext::<SharedBindings>().ok_or("SharedBindings extension not found")?;
-        let in_combat = cx.try_ext::<InCombat>().ok_or("InCombat extension not found")?;
+        let binds = cx.try_ext::<SharedBindings>().ok_or(AdapterError::Init(
+            "SharedBindings extension not found".into(),
+        ))?;
+        let in_combat = cx
+            .try_ext::<InCombat>()
+            .ok_or(AdapterError::Init("InCombat extension not found".into()))?;
 
         let logger = cx.log().clone();
 
@@ -87,17 +70,16 @@ impl Adapter for Gw2ExecAdapter {
                 let want_fast = queue_len > 0;
                 if want_fast && !fast_sent {
                     debug!(logger, "exec: queue non-empty -> mumble FAST");
-                    bus.adapters_notify_topic("mumble.fast".into(), None);
+                    bus.adapters_notify_topic_t(MUMBLE_FAST, None, ());
                     fast_sent = true;
                 } else if !want_fast && fast_sent {
                     debug!(logger, "exec: queue empty -> mumble SLOW");
-                    bus.adapters_notify_topic("mumble.slow".into(), None);
-                    fast_sent = false;
+                    bus.adapters_notify_topic_t(MUMBLE_SLOW, None, ());
                 }
             };
 
             // Expand an ExecRequest to a Job (steps baked)
-            let expand_job = |req: ExecRequest, binds: &SharedBindings| -> Job {
+            let expand_job = |req: Gw2ExecQueue, binds: &SharedBindings| -> Job {
                 use streamdeck_lib::input::dsl::sleep_ms;
                 let between = Duration::from_millis(req.inter_control_ms.unwrap_or(35));
                 let mut steps: Vec<InputStep> = Vec::new();
@@ -129,37 +111,36 @@ impl Adapter for Gw2ExecAdapter {
                 Job { req, steps }
             };
 
-            let handle_enqueue = |topic: &str, data: Option<serde_json::Value>| -> Option<Job> {
-                debug!(logger, "exec: received on topic={}, payload={:?}", topic, data);
-                match data.and_then(|v| serde_json::from_value::<ExecRequest>(v).ok()) {
-                    Some(req) => {
-                        let job = expand_job(req.clone(), &binds);
-                        if job.steps.is_empty() {
-                            warn!(logger, "exec: job had no steps, ignoring");
-                            None
-                        } else {
-                            Some(job)
-                        }
-                    }
-                    None => {
-                        warn!(logger, "exec: malformed payload for gw2.exec.queue");
-                        None
-                    }
+            let handle_enqueue = |topic: &str, data: Gw2ExecQueue| -> Option<Job> {
+                debug!(
+                    logger,
+                    "exec: received on topic={}, payload={:?}", topic, data
+                );
+                let job = expand_job(data.clone(), &binds);
+                if job.steps.is_empty() {
+                    warn!(
+                        logger,
+                        "exec: job for topic={} had no steps, ignoring", topic
+                    );
+                    return None;
                 }
+                debug!(logger, "exec: enqueuing job with {} steps", job.steps.len());
+                Some(job)
             };
 
             loop {
                 select! {
                     recv(inbox) -> msg => {
                         match msg {
-                            Ok(AdapterNotify { topic, data, .. }) if topic == "gw2-exec.queue" => {
-                                if let Some(job) = handle_enqueue(&topic, data) {
-                                    let was_empty = queue.is_empty();
-                                    queue.push_back(job);
-                                    if was_empty { refresh_mumble_mode(queue.len()); }
+                            Ok(note) => {
+                                if let Some(t) = note.downcast(GW2_EXEC_QUEUE) {
+                                    if let Some(job) = handle_enqueue(GW2_EXEC_QUEUE.name, t.clone()) {
+                                        let was_empty = queue.is_empty();
+                                        queue.push_back(job);
+                                        if was_empty { refresh_mumble_mode(queue.len()); }
+                                    }
                                 }
                             }
-                            Ok(_) => { /* ignore other topics */ }
                             Err(e) => {
                                 error!(logger, "exec: inbox error: {e}");
                                 break;
@@ -198,7 +179,7 @@ impl Adapter for Gw2ExecAdapter {
 
                         for step in &job.steps {
                             // Let stop take precedence
-                            if let Ok(_) = stop_rx.try_recv() {
+                            if stop_rx.try_recv().is_ok() {
                                 debug!(logger, "exec: stop requested during job; aborting");
                                 return;
                             }
@@ -217,16 +198,11 @@ impl Adapter for Gw2ExecAdapter {
 
             // On shutdown, ensure SLOW
             if fast_sent {
-                bus.adapters_notify_topic("mumble.slow".into(), None);
+                bus.adapters_notify_topic_t(MUMBLE_SLOW, None, ());
             }
             info!(logger, "GW2 exec adapter stopped");
         });
 
-        Ok(AdapterHandle {
-            join: Some(join),
-            shutdown: Box::new(move || {
-                let _ = stop_tx.send(());
-            }),
-        })
+        Ok(AdapterHandle::from_crossbeam(join, stop_tx))
     }
 }

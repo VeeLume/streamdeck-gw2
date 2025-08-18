@@ -1898,7 +1898,8 @@ dependencies = [
 
 [[package]]
 name = "streamdeck-lib"
-version = "0.1.0"
+version = "0.1.1"
+source = "git+https://github.com/veelume/streamdeck-lib?tag=v0.1.1#f48d311d0ed3d4b10f515acd895e638e457d246c"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1909,7 +1910,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
- "smallvec 1.15.1",
  "thiserror",
  "websocket",
  "windows",
