@@ -44,7 +44,7 @@ impl SharedBindings {
         Err("Failed to parse bindings from globals (unexpected shape)".to_string())
     }
 
-    pub fn write_to_globals(&self, globals: GlobalSettings, _sd: &SdClient) -> Result<(), String> {
+    pub fn write_to_globals(&self, globals: GlobalSettings) -> Result<(), String> {
         let binds = self.0.read().map_err(|e| e.to_string())?;
         let binds_json = serde_json::to_value(&*binds).map_err(|e| e.to_string())?;
 

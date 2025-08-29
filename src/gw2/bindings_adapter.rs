@@ -107,7 +107,7 @@ impl Adapter for Gw2BindingsAdapter {
                     Ok(_) => {
                         bus.log("Bindings updated successfully.", Level::Info);
                         // Optionally write to globals if needed
-                        if let Err(e) = shared_binds.write_to_globals(cx.globals(), cx.sd()) {
+                        if let Err(e) = shared_binds.write_to_globals(cx.globals()) {
                             bus.log(
                                 &format!("Failed to write bindings to globals: {e}"),
                                 Level::Error,
