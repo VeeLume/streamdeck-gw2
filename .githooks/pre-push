@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Optional override: export PLUGIN_BUNDLE=icu.veelume.sc-mapper.sdPlugin
-BUNDLE="${PLUGIN_BUNDLE:-icu.veelume.sc-mapper.sdPlugin}"
+# Optional override: export PLUGIN_BUNDLE="path/to/your/plugin.sdPlugin"
+BUNDLE="${PLUGIN_BUNDLE:-icu.veelume.gw2.sdPlugin}"
 
 echo "▶ cargo fmt --check"
 cargo fmt --all -- --check
