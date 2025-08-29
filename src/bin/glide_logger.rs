@@ -609,9 +609,9 @@ impl TemporalClassifier {
         }
 
         // Sticky safety: if airborne and proposal was Other, keep current.
-        if same_airborne_family(self.state, Movement::Other) {
-            // no-op
-        }
+        // if same_airborne_family(self.state, Movement::Other) {
+        //     // no-op
+        // }
 
         self.state
     }

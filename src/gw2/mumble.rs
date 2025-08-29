@@ -118,14 +118,10 @@ impl MumbleLink {
         }
     }
 
-    /// Ultra-cheap: read only avatar Z + ui_tick. Use for exec-time jump/fall decisions.
-    pub fn read_z_ui(&self) -> Option<(f32 /* z */, u32 /* ui_tick */)> {
+    pub fn read_linked_mem(&self) -> Option<LinkedMem> {
         unsafe {
-            let bytes =
-                std::slice::from_raw_parts(self.view_ptr.Value as *const u8, SHARED_MEM_SIZE);
-            let lm: LinkedMem = *bytemuck::from_bytes::<LinkedMem>(bytes);
-            let z = lm.f_avatar_position[2];
-            Some((z, lm.ui_tick))
+            let bytes = slice::from_raw_parts(self.view_ptr.Value as *const u8, SHARED_MEM_SIZE);
+            Some(*bytemuck::from_bytes::<LinkedMem>(bytes))
         }
     }
 
@@ -166,5 +162,12 @@ impl Drop for MumbleLink {
             let _ = UnmapViewOfFile(self.view_ptr);
             let _ = CloseHandle(self.map_handle);
         }
+    }
+}
+
+impl crate::gw2::airborne::MotionSource for MumbleLink {
+    fn read_motion(&self) -> Option<super::airborne::MotionSample> {
+        self.read_linked_mem()
+            .map(|lm| (lm.f_avatar_position, lm.f_avatar_front, lm.ui_tick))
     }
 }

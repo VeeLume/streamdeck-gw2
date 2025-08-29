@@ -13,6 +13,7 @@ mod actions {
     pub mod settings;
 }
 mod gw2 {
+    pub mod airborne;
     pub mod bindings_adapter;
     pub mod binds;
     pub mod enums;
