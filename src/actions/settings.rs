@@ -57,7 +57,7 @@ impl Action for SettingsAction {
         let bus = cx.bus();
         if let Some(path) = ev.settings.get("bindings_file").and_then(|v| v.as_str()) {
             // Notify adapters in the OnAppLaunch group (where the watcher lives)
-            bus.adapters_notify_topic_t(GW2_BINDINGS_PATH_SET, None, path.into());
+            bus.publish_t(GW2_BINDINGS_PATH_SET, path.into());
         }
     }
 

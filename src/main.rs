@@ -3,7 +3,7 @@ use crate::gw2::exec_adapter::Gw2ExecAdapter;
 use crate::gw2::gw2_api_adapter::Gw2ApiAdapter;
 use crate::gw2::mumble_adapter::MumbleAdapter;
 use crate::gw2::shared::SharedBindings;
-use crate::gw2::shared::{ActiveChar, InCombat, TemplateStore};
+use crate::gw2::shared::{ActiveChar, TemplateStore};
 use constcat::concat;
 use std::{process::exit, sync::Arc};
 use streamdeck_lib::prelude::*;
@@ -18,6 +18,7 @@ mod gw2 {
     pub mod enums;
     pub mod exec_adapter;
     pub mod gw2_api_adapter;
+    pub mod mumble;
     pub mod mumble_adapter;
     pub mod shared;
 }
@@ -58,7 +59,6 @@ fn main() {
     let shared_binds = SharedBindings::default();
     let template_store = TemplateStore::default();
     let active_char = ActiveChar::default();
-    let in_combat = InCombat::default();
 
     let plugin = match PluginBuilder::new()
         .set_hooks(hooks)
@@ -69,7 +69,6 @@ fn main() {
         .add_extension(Arc::new(shared_binds))
         .add_extension(Arc::new(template_store))
         .add_extension(Arc::new(active_char))
-        .add_extension(Arc::new(in_combat))
         .add_action(ActionFactory::new(
             concat!(PLUGIN_ID, ".set-template"),
             actions::set_template::SetTemplateAction::default,

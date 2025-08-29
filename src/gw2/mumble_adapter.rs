@@ -1,19 +1,15 @@
 #![cfg(windows)]
 
 use std::sync::Arc;
-use std::{slice, thread, time::Duration};
+use std::{thread, time::Duration};
 
-use bitflags::bitflags;
-use bytemuck::{Pod, Zeroable};
 use crossbeam_channel::{Receiver as CbReceiver, bounded, select, tick};
-use serde::Deserialize;
-use windows::Win32::Foundation::*;
-use windows::Win32::System::Memory::*;
 
 use streamdeck_lib::prelude::*;
 
-use crate::gw2::shared::{ActiveChar, InCombat};
-use crate::topics::{MUMBLE_ACTIVE_CHARACTER, MUMBLE_COMBAT, MUMBLE_FAST, MUMBLE_SLOW};
+use crate::gw2::mumble::MumbleLink;
+use crate::gw2::shared::ActiveChar;
+use crate::topics::MUMBLE_ACTIVE_CHARACTER;
 
 /// Publishes:
 /// - "mumble.combat"           -> bool
@@ -40,7 +36,7 @@ impl Adapter for MumbleAdapter {
     }
 
     fn topics(&self) -> &'static [&'static str] {
-        &[MUMBLE_FAST.name, MUMBLE_SLOW.name]
+        &[]
     }
 
     fn start(
@@ -51,28 +47,18 @@ impl Adapter for MumbleAdapter {
     ) -> AdapterResult {
         let (stop_tx, stop_rx) = bounded::<()>(1);
         let logger = cx.log().clone();
-        let in_combat_ext = cx
-            .try_ext::<InCombat>()
-            .expect("InCombat extension not found")
-            .clone();
         let active_char_ext = cx
             .try_ext::<ActiveChar>()
             .ok_or(AdapterError::Init("ActiveChar extension not found".into()))?
             .clone();
 
         let join = thread::spawn(move || {
-            const FAST: Duration = Duration::from_millis(16);
-            const SLOW: Duration = Duration::from_secs(10);
-
-            // default: slow
-            let mut fast = false;
-            let mut ticker = tick(SLOW);
-
+            // Tickers
+            let ticker = tick(Duration::from_secs(10));
             // mapping
             let mut link: Option<MumbleLink> = None;
 
             // de-dupe
-            let mut last_in_combat: Option<bool> = None;
             let mut last_name: Option<String> = None;
 
             info!(logger, "🎧 Mumble adapter started (slow)");
@@ -81,20 +67,7 @@ impl Adapter for MumbleAdapter {
                 select! {
                     recv(inbox) -> msg => {
                         match msg {
-                            Ok(note) => {
-                                if note.downcast(MUMBLE_FAST).is_some() {
-                                    fast = true;
-                                    ticker = tick(FAST);
-                                    debug!(logger, "🎚️ mumble mode -> FAST (combat only)");
-                                    // keep last_name as-is; we aren't emitting names in fast
-                                } else if note.downcast(MUMBLE_SLOW).is_some() {
-                                    fast = false;
-                                    ticker = tick(SLOW);
-                                    debug!(logger, "🎚️ mumble mode -> SLOW (combat + identity)");
-                                    // force a fresh name emit next slow tick
-                                    last_name = None;
-                                }
-                            },
+                            Ok(_) => {}
                             Err(_) => break, // inbox closed
                         }
                     }
@@ -111,14 +84,11 @@ impl Adapter for MumbleAdapter {
                                 Ok(l) => {
                                     info!(logger, "✅ MumbleLink mapped");
                                     link = Some(l);
-                                    // on (re)map, refresh dedupe so we re-emit state
-                                    last_in_combat = None;
-                                    if !fast { last_name = None; }
+                                    last_name = None; // force re-emit
+
                                 }
                                 Err(e) => {
-                                    if !fast {
-                                        warn!(logger, "⚠️ MumbleLink open failed: {} (retrying)", e);
-                                    }
+                                    warn!(logger, "⚠️ MumbleLink open failed: {} (retrying)", e);
                                     continue;
                                 }
                             }
@@ -126,31 +96,19 @@ impl Adapter for MumbleAdapter {
 
                         // Read: identity only in slow mode
                         if let Some(l) = link.as_ref() {
-                            let parse_identity = !fast;
-                            if let Some((ui, ident)) = l.read(parse_identity) {
-                                // combat always processed
-                                let in_combat = ui.is_in_combat();
-                                if last_in_combat != Some(in_combat) {
-                                    last_in_combat = Some(in_combat);
-                                    in_combat_ext.set(in_combat);
-                                    bus.action_notify_topic_t(
-                                        MUMBLE_COMBAT,
-                                        None,
-                                        in_combat,
-                                    );
-                                }
-
-                                // identity only when parsed (slow mode)
+                            if let Some((_, ident)) = l.read_full(true) {
                                 if let Some(id) = ident {
-                                    let name = id.name; // empty string is valid
-                                    if last_name.as_deref() != Some(name.as_str()) {
-                                        last_name = Some(name.clone());
-                                        active_char_ext.set(Some(name.clone()));
-                                        bus.action_notify_topic_t(
-                                            MUMBLE_ACTIVE_CHARACTER,
-                                            None,
-                                            name,
-                                        );
+                                    let name = id.name.trim();
+                                    if !name.is_empty() {
+                                        if last_name.as_deref() != Some(name) {
+                                            last_name = Some(name.to_string());
+                                            active_char_ext.set(Some(name.into()));
+                                            bus.publish_t(MUMBLE_ACTIVE_CHARACTER, Some(name.into()));
+                                        }
+                                    } else if last_name.is_some() {
+                                        last_name = None;
+                                        active_char_ext.set(None);
+                                        bus.publish_t(MUMBLE_ACTIVE_CHARACTER, None);
                                     }
                                 }
                             } else {
@@ -170,150 +128,5 @@ impl Adapter for MumbleAdapter {
         });
 
         Ok(AdapterHandle::from_crossbeam(join, stop_tx))
-    }
-}
-
-// ---- Mumble types + mapping -------------------------------------------------
-
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct UiState: u32 {
-        const MAP_OPEN               = 1 << 0;
-        const COMPASS_TOP_RIGHT      = 1 << 1;
-        const COMPASS_ROTATION       = 1 << 2;
-        const GAME_HAS_FOCUS         = 1 << 3;
-        const COMPETITIVE_MODE       = 1 << 4;
-        const TEXTBOX_HAS_FOCUS      = 1 << 5;
-        const IN_COMBAT              = 1 << 6;
-    }
-}
-impl UiState {
-    pub fn is_in_combat(self) -> bool {
-        self.contains(UiState::IN_COMBAT)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Identity {
-    pub name: String,
-    pub profession: Option<u8>,
-    pub spec: Option<u16>,
-    pub race: Option<u8>,
-    pub map_id: Option<u32>,
-    pub world_id: Option<u32>,
-    pub team_color_id: Option<u8>,
-    pub commander: Option<bool>,
-    pub fov: Option<f32>,
-    pub uisz: Option<u8>,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Zeroable, Pod)]
-pub struct LinkedMem {
-    pub ui_version: u32,
-    pub ui_tick: u32,
-    pub f_avatar_position: [f32; 3],
-    pub f_avatar_front: [f32; 3],
-    pub f_avatar_top: [f32; 3],
-    pub name: [u16; 256],
-    pub f_camera_position: [f32; 3],
-    pub f_camera_front: [f32; 3],
-    pub f_camera_top: [f32; 3],
-    pub identity: [u16; 256],
-    pub context_len: u32,
-    pub context: [u8; 256],
-    pub description: [u16; 2048],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Zeroable, Pod)]
-pub struct MumbleContext {
-    pub server_address: [u8; 28],
-    pub map_id: u32,
-    pub map_type: u32,
-    pub shard_id: u32,
-    pub instance: u32,
-    pub build_id: u32,
-    pub ui_state: u32,
-    pub compass_width: u16,
-    pub compass_height: u16,
-    pub compass_rotation: f32,
-    pub player_x: f32,
-    pub player_y: f32,
-    pub map_center_x: f32,
-    pub map_center_y: f32,
-    pub map_scale: f32,
-    pub process_id: u32,
-    pub mount_index: u8,
-    pub _padding: [u8; 3],
-}
-
-const SHARED_MEM_SIZE: usize = std::mem::size_of::<LinkedMem>();
-
-pub struct MumbleLink {
-    map_handle: HANDLE,
-    view_ptr: MEMORY_MAPPED_VIEW_ADDRESS,
-}
-
-impl MumbleLink {
-    pub fn new() -> Result<Self, String> {
-        let handle =
-            (unsafe { OpenFileMappingW(FILE_MAP_READ.0, false, windows_core::w!("MumbleLink")) })
-                .map_err(|_| "OpenFileMappingW(MumbleLink) failed".to_string())?;
-
-        let ptr = unsafe { MapViewOfFile(handle, FILE_MAP_READ, 0, 0, SHARED_MEM_SIZE) };
-        if ptr.Value.is_null() {
-            unsafe {
-                let _ = CloseHandle(handle);
-            }
-            return Err("MapViewOfFile failed".to_string());
-        }
-
-        Ok(MumbleLink {
-            map_handle: handle,
-            view_ptr: ptr,
-        })
-    }
-
-    /// Returns (UiState, Identity) if read succeeded.
-    /// `parse_identity` should be `false` in FAST mode.
-    pub fn read(&self, parse_identity: bool) -> Option<(UiState, Option<Identity>)> {
-        unsafe {
-            let bytes = slice::from_raw_parts(self.view_ptr.Value as *const u8, SHARED_MEM_SIZE);
-            let lm: LinkedMem = *bytemuck::from_bytes::<LinkedMem>(bytes);
-
-            let ctx = bytemuck::try_from_bytes::<MumbleContext>(
-                &lm.context[..std::mem::size_of::<MumbleContext>()],
-            )
-            .ok()?
-            .to_owned();
-            let ui = UiState::from_bits_truncate(ctx.ui_state);
-
-            let ident = if parse_identity {
-                let s = String::from_utf16_lossy(&lm.identity)
-                    .trim_end_matches('\0')
-                    .to_string();
-                let upto = s.find('}').map(|i| i + 1).unwrap_or(s.len());
-                let s = &s[..upto];
-                if s.trim_start().starts_with('{') {
-                    serde_json::from_str::<Identity>(s).ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            Some((ui, ident))
-        }
-    }
-}
-
-impl Drop for MumbleLink {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = UnmapViewOfFile(self.view_ptr);
-            let _ = CloseHandle(self.map_handle);
-        }
     }
 }

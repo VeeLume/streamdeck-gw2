@@ -11,18 +11,39 @@ use crate::{
         shared::{ActiveChar, TemplateStore},
     },
     topics::{
-        GW2_API_CHARACTER_CHANGED, GW2_API_TEMPLATE_CHANGED, GW2_EXEC_QUEUE, Gw2ExecQueue,
-        MUMBLE_ACTIVE_CHARACTER,
+        ExecState, GW2_ANIMATION_TICK, GW2_API_CHARACTER_CHANGED, GW2_API_TEMPLATE_CHANGED,
+        GW2_EXEC_PROGRESS, GW2_EXEC_QUEUE, Gw2ExecQueue, MUMBLE_ACTIVE_CHARACTER,
     },
 };
 
 // ── Action ────────────────────────────────────────────────────────────────────
+
+const QUEUED_SET: &[&str] = &[
+    "imgs/set_template/template_pulse_q_0",
+    "imgs/set_template/template_pulse_q_1",
+    "imgs/set_template/template_pulse_q_2",
+];
+
+const RUNNING_SET: &[&str] = &[
+    "imgs/set_template/template_pulse_r_0",
+    "imgs/set_template/template_pulse_r_1",
+    "imgs/set_template/template_pulse_r_2",
+];
+
+enum AnimSet {
+    Queued,
+    Running,
+}
 
 #[derive(Default)]
 pub struct SetTemplateAction {
     selected_build: Option<u8>,     // 1..=9
     selected_equipment: Option<u8>, // 1..=9
     last_title: Option<String>,
+
+    anim_running: bool,
+    anim_phase: u8,            // 0..2
+    anim_set: Option<AnimSet>, // which set to use
 }
 
 impl ActionStatic for SetTemplateAction {
@@ -39,6 +60,8 @@ impl Action for SetTemplateAction {
             MUMBLE_ACTIVE_CHARACTER.name,
             MUMBLE_ACTIVE_CHARACTER.name,
             GW2_API_CHARACTER_CHANGED.name,
+            GW2_EXEC_PROGRESS.name,
+            GW2_ANIMATION_TICK.name,
         ]
     }
 
@@ -58,6 +81,13 @@ impl Action for SetTemplateAction {
     fn will_appear(&mut self, cx: &Context, ev: &WillAppear) {
         debug!(cx.log(), "SetTemplateAction will_appear: {:?}", ev.context);
         self.apply_settings_json(ev.settings, cx, ev.context);
+        debug!(cx.log(), "Setting idle icon");
+        cx.sd().set_image(
+            ev.context,
+            Some("imgs/set_template/template_idle".into()),
+            None,
+            None,
+        );
         debug!(cx.log(), "Refreshing title for context: {}", ev.context);
         self.refresh_title(cx, ev.context);
     }
@@ -107,6 +137,73 @@ impl Action for SetTemplateAction {
                 );
                 self.refresh_title(cx, ctx_id);
             }
+            return;
+        }
+
+        if let Some(m) = event.downcast(GW2_EXEC_PROGRESS) {
+            debug!(cx.log(), "Received GW2 exec progress event: {:?}", m);
+            match m {
+                ExecState::Queued => {
+                    self.anim_running = true;
+                    self.anim_phase = 0;
+                    self.anim_set = Some(AnimSet::Queued);
+                    cx.sd()
+                        .set_image(ctx_id, Some(QUEUED_SET[0].into()), None, None);
+                }
+                ExecState::Started => {
+                    self.anim_running = true;
+                    self.anim_phase = 0;
+                    self.anim_set = Some(AnimSet::Running);
+                    cx.sd()
+                        .set_image(ctx_id, Some(RUNNING_SET[0].into()), None, None);
+                }
+                ExecState::Done => {
+                    self.anim_running = false;
+                    self.anim_phase = 0;
+                    self.anim_set = None;
+                    cx.sd().set_image(
+                        ctx_id,
+                        Some("imgs/set_template/template_idle".into()),
+                        None,
+                        None,
+                    );
+                }
+            }
+            return;
+        }
+
+        if event.is(GW2_ANIMATION_TICK) {
+            if self.anim_running {
+                self.anim_phase = (self.anim_phase + 1) % 3;
+                match self.anim_set {
+                    Some(AnimSet::Queued) => {
+                        cx.sd().set_image(
+                            ctx_id,
+                            Some(QUEUED_SET[self.anim_phase as usize].into()),
+                            None,
+                            None,
+                        );
+                    }
+                    Some(AnimSet::Running) => {
+                        cx.sd().set_image(
+                            ctx_id,
+                            Some(RUNNING_SET[self.anim_phase as usize].into()),
+                            None,
+                            None,
+                        );
+                    }
+                    None => {
+                        // shouldn't happen
+                        cx.sd().set_image(
+                            ctx_id,
+                            Some("imgs/set_template/template_idle".into()),
+                            None,
+                            None,
+                        );
+                    }
+                }
+            }
+            return;
         }
     }
 
@@ -129,13 +226,15 @@ impl Action for SetTemplateAction {
             return;
         }
 
-        cx.bus().adapters_notify_topic_t(
+        cx.bus().publish_t(
             GW2_EXEC_QUEUE,
-            None,
             Gw2ExecQueue {
                 controls,
                 allow_in_combat: false,
+                allow_out_of_combat: true,
+                allow_gliding_or_falling: false,
                 inter_control_ms: None, // optional pacing between controls
+                origin_ctx: ev.context.into(),
             },
         );
     }

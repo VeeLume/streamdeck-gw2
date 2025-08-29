@@ -92,16 +92,3 @@ impl ActiveChar {
         }
     }
 }
-
-#[derive(Clone, Default)]
-pub struct InCombat(Arc<RwLock<bool>>);
-impl InCombat {
-    pub fn get(&self) -> bool {
-        self.0.read().ok().map(|g| *g).unwrap_or(false)
-    }
-    pub fn set(&self, v: bool) {
-        if let Ok(mut w) = self.0.write() {
-            *w = v;
-        }
-    }
-}

@@ -2,11 +2,8 @@ use streamdeck_lib::prelude::*;
 
 use crate::gw2::enums::{CharacterChange, KeyControl, TemplateNames};
 
-pub const MUMBLE_ACTIVE_CHARACTER: TopicId<String> = TopicId::new("mumble.active-character");
-
-pub const MUMBLE_COMBAT: TopicId<bool> = TopicId::new("mumble.in-combat");
-pub const MUMBLE_FAST: TopicId<()> = TopicId::new("mumble.fast");
-pub const MUMBLE_SLOW: TopicId<()> = TopicId::new("mumble.slow");
+pub const MUMBLE_ACTIVE_CHARACTER: TopicId<Option<String>> =
+    TopicId::new("mumble.active-character");
 
 pub const GW2_API_GET_CHARACTERS: TopicId<()> = TopicId::new("gw2-api.get-characters");
 pub const GW2_API_TEMPLATE_CHANGED: TopicId<Gw2ApiTemplateChanged> =
@@ -33,12 +30,24 @@ pub struct Gw2ApiCharacterChanged {
     pub change: CharacterChange,
 }
 
+pub const GW2_ANIMATION_TICK: TopicId<()> = TopicId::new("gw2.animation.tick");
+pub const GW2_EXEC_PROGRESS: TopicId<ExecState> = TopicId::new("gw2.exec_progress");
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecState {
+    Queued,
+    Started,
+    Done,
+}
+
 pub const GW2_EXEC_QUEUE: TopicId<Gw2ExecQueue> = TopicId::new("gw2-exec.queue");
 #[derive(Debug, Clone)]
 pub struct Gw2ExecQueue {
     pub controls: Vec<KeyControl>,
     pub allow_in_combat: bool,
+    pub allow_out_of_combat: bool,
+    pub allow_gliding_or_falling: bool,
     pub inter_control_ms: Option<u64>,
+    pub origin_ctx: String,
 }
 
 pub const GW2_BINDINGS_UPDATED: TopicId<()> = TopicId::new("gw2.bindings.updated");

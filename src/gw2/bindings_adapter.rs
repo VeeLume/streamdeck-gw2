@@ -6,7 +6,7 @@ use streamdeck_lib::prelude::*;
 
 use crate::{
     gw2::{binds::BindingSet, shared::SharedBindings},
-    topics::{GW2_BINDINGS_PATH_RELOAD, GW2_BINDINGS_PATH_SET},
+    topics::{GW2_BINDINGS_PATH_RELOAD, GW2_BINDINGS_PATH_SET, GW2_BINDINGS_UPDATED},
 };
 
 /// Publishes:
@@ -113,7 +113,7 @@ impl Adapter for Gw2BindingsAdapter {
                                 Level::Error,
                             );
                         }
-                        bus.action_notify_topic_t(GW2_BINDINGS_PATH_RELOAD, None, ());
+                        bus.publish_t(GW2_BINDINGS_UPDATED, ());
                     }
                     Err(e) => {
                         bus.log(&format!("Failed to replace bindings: {e}"), Level::Error);
@@ -146,7 +146,6 @@ impl Adapter for Gw2BindingsAdapter {
                                 if note.downcast(GW2_BINDINGS_PATH_RELOAD).is_some() {
                                     if let Some(p) = watched_path.clone() {
                                         update_bindings_from_file(&p);
-                                        rewatch(&p);
                                     }
                                 }
 

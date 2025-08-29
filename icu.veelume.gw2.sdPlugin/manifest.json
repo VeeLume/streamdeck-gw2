@@ -28,10 +28,10 @@
     {
       "Name": "Set Template",
       "UUID": "icu.veelume.gw2.set-template",
-      "Icon": "imgs/set_template/icon",
+      "Icon": "imgs/set_template/template_idle",
       "States": [
         {
-          "Image": "imgs/set_template/icon",
+          "Image": "imgs/set_template/template_idle",
           "TitleAlignment": "middle",
           "FontSize": 9,
           "FontFamily": "Arial"

@@ -123,9 +123,8 @@ impl Adapter for Gw2ApiAdapter {
                         true
                     } else {
                         removed += 1;
-                        bus.action_notify_topic_t(
+                        bus.publish_t(
                             GW2_API_CHARACTER_CHANGED,
-                            None,
                             Gw2ApiCharacterChanged {
                                 name: name.clone(),
                                 change: crate::gw2::enums::CharacterChange::Removed,
@@ -140,9 +139,8 @@ impl Adapter for Gw2ApiAdapter {
                     match last_seen.get(name) {
                         None => {
                             added += 1;
-                            bus.action_notify_topic_t(
+                            bus.publish_t(
                                 GW2_API_CHARACTER_CHANGED,
-                                None,
                                 Gw2ApiCharacterChanged {
                                     name: name.clone(),
                                     change: crate::gw2::enums::CharacterChange::Added,
@@ -153,9 +151,8 @@ impl Adapter for Gw2ApiAdapter {
                         Some(old_t) => {
                             if old_t != new_t {
                                 changed += 1;
-                                bus.action_notify_topic_t(
+                                bus.publish_t(
                                     GW2_API_TEMPLATE_CHANGED,
-                                    None,
                                     Gw2ApiTemplateChanged {
                                         name: name.clone(),
                                         before: old_t.clone(),
@@ -175,9 +172,8 @@ impl Adapter for Gw2ApiAdapter {
                 last_seen.clear();
                 last_seen.extend(new_map);
 
-                bus.action_notify_topic_t(
+                bus.publish_t(
                     GW2_API_FETCHED,
-                    None,
                     Gw2ApiFetched {
                         total: last_seen.len(),
                         added,
