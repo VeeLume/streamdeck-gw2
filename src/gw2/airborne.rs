@@ -4,7 +4,7 @@ use std::{
 };
 
 /// A single motion sample: (position (x,z,y) in meters, front (x,z,y), ui_tick)
-pub type MotionSample = ([f32; 3], [f32; 3], u32);
+pub type MotionSample = ([f32; 3], [f32; 3]);
 
 /// Something that can provide motion samples (position + front + ui_tick).
 /// We implement this for your MumbleLink below (in gw2::mumble).
@@ -449,7 +449,7 @@ impl AirClassifier {
             temporal: TemporalClassifier::new(now),
             last_state: Movement::Idle,
             last_change: now,
-            landing_grace_ms: 250,
+            landing_grace_ms: 100,
         }
     }
 
@@ -457,7 +457,7 @@ impl AirClassifier {
     pub fn update_with<S: MotionSource>(&mut self, source: &S) -> Movement {
         let now = Instant::now();
 
-        let (pos_xzy, front_xzy, tick) = match source.read_motion() {
+        let (pos_xzy, front_xzy) = match source.read_motion() {
             Some(v) => v,
             None => return self.last_state,
         };

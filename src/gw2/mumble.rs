@@ -40,7 +40,7 @@ pub struct Identity {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
-struct LinkedMem {
+pub struct LinkedMem {
     ui_version: u32,
     ui_tick: u32,
     f_avatar_position: [f32; 3],
@@ -58,7 +58,7 @@ struct LinkedMem {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
-struct MumbleContext {
+pub struct MumbleContext {
     server_address: [u8; 28],
     map_id: u32,
     map_type: u32,
@@ -168,6 +168,6 @@ impl Drop for MumbleLink {
 impl crate::gw2::airborne::MotionSource for MumbleLink {
     fn read_motion(&self) -> Option<super::airborne::MotionSample> {
         self.read_linked_mem()
-            .map(|lm| (lm.f_avatar_position, lm.f_avatar_front, lm.ui_tick))
+            .map(|lm| (lm.f_avatar_position, lm.f_avatar_front))
     }
 }
