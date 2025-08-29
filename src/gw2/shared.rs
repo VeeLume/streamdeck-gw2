@@ -2,7 +2,6 @@
 use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
-use serde_json::Map;
 use streamdeck_lib::prelude::{GlobalSettings, SdClient};
 
 use crate::gw2::{binds::BindingSet, enums::TemplateNames};
@@ -24,25 +23,33 @@ impl SharedBindings {
 
     pub fn replace_from_globals(
         &self,
-        globals: &Map<String, serde_json::Value>,
+        globals: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<(), String> {
-        if let Some(bindings) = globals.get("bindings") {
-            if let Ok(new_binds) = serde_json::from_value::<BindingSet>(bindings.clone()) {
-                self.replace_bindings(new_binds)
-            } else {
-                Err("Failed to parse bindings from globals".to_string())
-            }
-        } else {
-            Err("No bindings found in globals".to_string())
+        let Some(v) = globals.get("bindings") else {
+            return Err("No bindings found in globals".to_string());
+        };
+
+        // 1) Try flat shape: bindings -> BindingSet
+        if let Ok(bs) = serde_json::from_value::<BindingSet>(v.clone()) {
+            return self.replace_bindings(bs);
         }
+
+        // 2) Try wrapped shape: bindings -> { bindings: BindingSet }
+        if let Some(inner) = v.as_object().and_then(|o| o.get("bindings")) {
+            if let Ok(bs) = serde_json::from_value::<BindingSet>(inner.clone()) {
+                return self.replace_bindings(bs);
+            }
+        }
+
+        Err("Failed to parse bindings from globals (unexpected shape)".to_string())
     }
 
-    pub fn write_to_globals(&self, globals: GlobalSettings, sd: &SdClient) -> Result<(), String> {
+    pub fn write_to_globals(&self, globals: GlobalSettings, _sd: &SdClient) -> Result<(), String> {
         let binds = self.0.read().map_err(|e| e.to_string())?;
         let binds_json = serde_json::to_value(&*binds).map_err(|e| e.to_string())?;
-        let mut patch = serde_json::Map::new();
-        patch.insert("bindings".to_string(), binds_json);
-        globals.set("bindings", serde_json::Value::Object(patch));
+
+        // Write flat shape; DO NOT wrap in another {"bindings": ...}
+        globals.set("bindings", binds_json);
         Ok(())
     }
 }
